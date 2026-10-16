@@ -1,6 +1,6 @@
 # TP-Link Archer C5v — OpenWrt
 
-EcoNet EN751221 tabanlı TP-Link Archer C5v için OpenWrt portu (kernel 6.18).
+EcoNet EN751221 tabanlı TP-Link Archer C5v için OpenWrt portu (kernel 6.18). Archer c5v v1.8 sürümüne kurulum yapıldı.
 
 > **Sorumluluk reddi:** Bu yazılım "olduğu gibi" sunulur, hiçbir garanti verilmez. Kurulumdan doğabilecek arıza, veri kaybı veya cihaz bozulmasından kullanıcı sorumludur. ISP'nin kiraladığı cihazlara kurulumdan doğan hukuki sorunlar da kullanıcıya aittir.
 

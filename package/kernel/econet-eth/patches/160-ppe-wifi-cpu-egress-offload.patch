@@ -1,0 +1,274 @@
+From: genetixteam <genetixteam@gmail.com>
+Subject: econet-eth: PPE offload for wired->Wi-Fi flows with CPU egress
+
+Do what the vendor hw_nat "ExtIf" path does: a flow that enters on the
+wired port and leaves on another netdev (br-lan towards Wi-Fi clients)
+is bound with the CPU as PSE egress port. The PPE still does the NAT and
+the L2 rewrite (incl. VLAN/PPPoE removal); frames come back with crsn
+HIT_BIND_FORCE_CPU and are handed straight to the egress device,
+skipping the stack. Off by default:
+
+  echo 1 > /sys/module/econet_eth/parameters/wifi_offload
+
+Also refuse flows whose ingress is not the wired port (the upload
+direction of Wi-Fi flows): the PPE never sees those packets, and
+accepting them left Wi-Fi flows half "hardware offloaded".
+
+New debugfs econet_ppe/diag counters: repl_ok_cpu, repl_rej_ingress,
+rx_cpu_xmit, rx_cpu_nomatch.
+
+--- a/econet_ppe.h	2026-10-14 01:13:39.890393005 +0300
++++ b/econet_ppe.h	2026-10-14 17:07:13.491275784 +0300
+@@ -167,6 +167,10 @@
+ 	EN75_DIAG_REPL_REJ_ODEV,
+ 	EN75_DIAG_REPL_REJ_MAC,
+ 	EN75_DIAG_REPL_REJ_PORTS,
++	EN75_DIAG_REPL_OK_CPU,
++	EN75_DIAG_REPL_REJ_INGRESS,
++	EN75_DIAG_RX_CPU_XMIT,
++	EN75_DIAG_RX_CPU_NOMATCH,
+ 	EN75_DIAG_COUNT,
+ };
+ extern u32 en75_diag[EN75_DIAG_COUNT];
+@@ -256,6 +260,18 @@
+  * @hw_slot - the exact slot the engine will search - so subsequent packets hit.
+  */
+ struct sk_buff;
++/**
++ * en75_ppe_offload_rx_cpu_xmit() - transmit a PPE-forwarded-to-CPU packet.
++ * @ppe: PPE context.
++ * @skb: received frame, data at the MAC header, crsn HIT_BIND_FORCE_CPU.
++ *
++ * For flows whose egress is not a GDM port (Wi-Fi behind br-lan) the bound
++ * FOE entry sends the already NATed and L2-rewritten frame to the CPU; this
++ * hands it straight to the egress device, skipping the stack. Returns true
++ * if the skb was consumed.
++ */
++bool en75_ppe_offload_rx_cpu_xmit(struct en75_ppe *ppe, struct sk_buff *skb);
++
+ void en75_ppe_offload_rx_commit(struct en75_ppe *ppe, struct sk_buff *skb,
+ 				u32 hw_slot);
+ 
+--- a/econet_ppe_offload.c	2026-10-14 01:13:39.891217754 +0300
++++ b/econet_ppe_offload.c	2026-10-14 17:07:52.293742447 +0300
+@@ -26,7 +26,9 @@
+ #include <linux/debugfs.h>
+ #include <linux/err.h>
+ #include <linux/etherdevice.h>
++#include <linux/if_arp.h>
+ #include <linux/if_ether.h>
++#include <linux/netdevice.h>
+ #include <linux/ip.h>
+ #include <linux/ipv6.h>
+ #include <linux/if_vlan.h>
+@@ -40,6 +42,56 @@
+ 
+ #include "econet_ppe.h"
+ 
++/*
++ * Wi-Fi (non-GDM egress) offload, the "ExtIf" scheme of the vendor hw_nat:
++ * a flow that enters on the wired port but leaves on another netdev (br-lan
++ * towards Wi-Fi clients) is bound with the CPU as PSE egress port. The PPE
++ * still does the NAT and the L2 rewrite, and the CPU only hands the frame to
++ * the egress device. Off by default; enable with
++ *   echo 1 > /sys/module/econet_eth/parameters/wifi_offload
++ */
++static bool en75_wifi_offload;
++module_param_named(wifi_offload, en75_wifi_offload, bool, 0644);
++MODULE_PARM_DESC(wifi_offload, "Offload wired->non-GDM (Wi-Fi) flows to the PPE with CPU egress");
++
++#define EN75_CPU_ODEV_MAX 8
++
++/* Egress devices of CPU-port flows, matched on the rewritten source MAC.
++ * Append-only, written under en75_flow_offload_mutex, read locklessly. */
++static struct {
++	int ifindex;
++	u8 mac[ETH_ALEN];
++} en75_cpu_odevs[EN75_CPU_ODEV_MAX];
++static int en75_cpu_odev_num;
++
++static void en75_cpu_odev_register(const struct net_device *dev, const u8 *mac)
++{
++	int i, n = en75_cpu_odev_num;
++
++	for (i = 0; i < n; i++)
++		if (en75_cpu_odevs[i].ifindex == dev->ifindex &&
++		    ether_addr_equal(en75_cpu_odevs[i].mac, mac))
++			return;
++	if (n >= EN75_CPU_ODEV_MAX)
++		return;
++
++	en75_cpu_odevs[n].ifindex = dev->ifindex;
++	ether_addr_copy(en75_cpu_odevs[n].mac, mac);
++	smp_wmb();
++	WRITE_ONCE(en75_cpu_odev_num, n + 1);
++}
++
++static int en75_cpu_odev_lookup(const u8 *mac)
++{
++	int i, n = READ_ONCE(en75_cpu_odev_num);
++
++	smp_rmb();
++	for (i = 0; i < n; i++)
++		if (ether_addr_equal(en75_cpu_odevs[i].mac, mac))
++			return en75_cpu_odevs[i].ifindex;
++	return 0;
++}
++
+ struct en75_flow_data {
+ 	struct ethhdr eth;
+ 
+@@ -325,6 +377,8 @@
+ 	u8 l4proto = 0;
+ 	struct en75_flow_tuple keytuple;
+ 	struct net_device *odev = NULL;
++	int ingress_ifindex = 0;
++	bool to_cpu = false;
+ 	int err = 0;
+ 	int i;
+ 
+@@ -335,6 +389,11 @@
+ 	if (!flow_rule_match_key(rule, FLOW_DISSECTOR_KEY_META)) {
+ 		en75_diag[EN75_DIAG_REPL_REJ_BASIC]++;
+ 		return -EOPNOTSUPP;
++	} else {
++		struct flow_match_meta meta;
++
++		flow_rule_match_meta(rule, &meta);
++		ingress_ifindex = meta.key->ingress_ifindex;
+ 	}
+ 
+ 	if (flow_rule_match_key(rule, FLOW_DISSECTOR_KEY_CONTROL)) {
+@@ -422,11 +481,33 @@
+ 	 * the wired ports and black-hole the flow. This is what broke
+ 	 * Wi-Fi clients' download while wired stayed at line rate.
+ 	 */
+-	if (!odev || odev != ppe->ndev) {
++	if (!odev) {
+ 		en75_diag[EN75_DIAG_REPL_REJ_ODEV]++;
+ 		return -EOPNOTSUPP;
+ 	}
+ 
++	/* Only packets that enter on the wired port pass through the PPE, so a
++	 * flow coming from anywhere else (a Wi-Fi client's upload direction)
++	 * can never be hit; refuse it instead of leaving a dead entry behind.
++	 */
++	if (ingress_ifindex != ppe->ndev->ifindex) {
++		en75_diag[EN75_DIAG_REPL_REJ_INGRESS]++;
++		return -EOPNOTSUPP;
++	}
++
++	if (odev != ppe->ndev) {
++		/* Wired in, non-GDM out (Wi-Fi behind br-lan): bind with the
++		 * CPU as egress and forward from en75_ppe_offload_rx_cpu_xmit().
++		 */
++		if (!READ_ONCE(en75_wifi_offload) ||
++		    (odev->flags & IFF_LOOPBACK) || odev->type != ARPHRD_ETHER ||
++		    data.vlan.num || data.pppoe.num) {
++			en75_diag[EN75_DIAG_REPL_REJ_ODEV]++;
++			return -EOPNOTSUPP;
++		}
++		to_cpu = true;
++	}
++
+ 	if (!is_valid_ether_addr(data.eth.h_source) ||
+ 	    !is_valid_ether_addr(data.eth.h_dest)) {
+ 		en75_diag[EN75_DIAG_REPL_REJ_MAC]++;
+@@ -444,7 +525,8 @@
+ 	 * switch which physical port to use, so a single GDM serves LAN+WAN.
+ 	 * The bound flow is now forwarded entirely in hardware (no CPU). */
+ 	err = en75_foe_entry_prepare(&foe, offload_type, l4proto,
+-				     EN75_PPE_PSE_GDM1_PORT,
++				     to_cpu ? EN75_PPE_PSE_CPU_PORT :
++					      EN75_PPE_PSE_GDM1_PORT,
+ 				     data.eth.h_source, data.eth.h_dest);
+ 	if (err)
+ 		return err;
+@@ -570,6 +652,10 @@
+ 	}
+ 
+ 	en75_diag[keytuple.is_v6 ? EN75_DIAG_REPL_OK6 : EN75_DIAG_REPL_OK4]++;
++	if (to_cpu) {
++		en75_cpu_odev_register(odev, data.eth.h_source);
++		en75_diag[EN75_DIAG_REPL_OK_CPU]++;
++	}
+ 
+ 	return 0;
+ }
+@@ -761,6 +847,52 @@
+ 	return -1;
+ }
+ 
++bool en75_ppe_offload_rx_cpu_xmit(struct en75_ppe *ppe, struct sk_buff *skb)
++{
++	struct net_device *odev;
++	struct ethhdr *eh;
++	int ifindex;
++
++	/* Not gated on wifi_offload: entries bound while it was on must keep
++	 * forwarding after it is switched off, until they age out. */
++	if (IS_ERR_OR_NULL(ppe) || !ppe->ndev)
++		return false;
++	if (skb->len < ETH_HLEN)
++		return false;
++
++	/* Only frames the PPE really rewrote for a CPU-egress flow: the source
++	 * MAC is the egress device's, the destination is not ours. Anything
++	 * else (e.g. an entry bound before wifi_offload was turned off) takes
++	 * the normal stack path untouched.
++	 */
++	eh = (struct ethhdr *)skb->data;
++	ifindex = en75_cpu_odev_lookup(eh->h_source);
++	if (!ifindex || !is_unicast_ether_addr(eh->h_dest) ||
++	    ether_addr_equal(eh->h_dest, ppe->ndev->dev_addr)) {
++		en75_diag[EN75_DIAG_RX_CPU_NOMATCH]++;
++		return false;
++	}
++
++	rcu_read_lock();
++	odev = dev_get_by_index_rcu(dev_net(ppe->ndev), ifindex);
++	if (!odev || !(odev->flags & IFF_UP)) {
++		rcu_read_unlock();
++		en75_diag[EN75_DIAG_RX_CPU_NOMATCH]++;
++		return false;
++	}
++
++	skb->dev = odev;
++	skb->protocol = eh->h_proto;
++	skb_reset_mac_header(skb);
++	skb_set_network_header(skb, ETH_HLEN);
++	skb->ip_summed = CHECKSUM_NONE;	/* the PPE already fixed the sums */
++	en75_diag[EN75_DIAG_RX_CPU_XMIT]++;
++	dev_queue_xmit(skb);
++	rcu_read_unlock();
++
++	return true;
++}
++
+ void en75_ppe_offload_rx_commit(struct en75_ppe *ppe, struct sk_buff *skb,
+ 				u32 hw_slot)
+ {
+@@ -998,6 +1130,10 @@
+ 	[EN75_DIAG_REPL_REJ_ODEV] = "repl_rej_odev",
+ 	[EN75_DIAG_REPL_REJ_MAC]  = "repl_rej_mac",
+ 	[EN75_DIAG_REPL_REJ_PORTS] = "repl_rej_ports",
++	[EN75_DIAG_REPL_OK_CPU] = "repl_ok_cpu",
++	[EN75_DIAG_REPL_REJ_INGRESS] = "repl_rej_ingress",
++	[EN75_DIAG_RX_CPU_XMIT] = "rx_cpu_xmit",
++	[EN75_DIAG_RX_CPU_NOMATCH] = "rx_cpu_nomatch",
+ };
+ 
+ static int en75_diag_show(struct seq_file *m, void *v)
+--- a/econet_qdma.c	2026-10-14 01:13:39.890861654 +0300
++++ b/econet_qdma.c	2026-10-14 17:07:13.494175022 +0300
+@@ -220,6 +220,10 @@
+ 			 * so the offload path can be confirmed on hardware. */
+ 		static bool en75_ppe_hit_logged;
+ 
++		/* CPU-egress (Wi-Fi) flow: already NATed by the PPE. */
++		if (en75_ppe_offload_rx_cpu_xmit(en75_eth_ppe(q->qdma->eth), skb))
++			return;
++
+ 		if (!READ_ONCE(en75_ppe_hit_logged)) {
+ 			WRITE_ONCE(en75_ppe_hit_logged, true);
+ 			pr_info("econet-eth: PPE offload first bound-flow hit at slot %u\n",

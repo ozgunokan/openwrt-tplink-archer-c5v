@@ -1,268 +1,234 @@
-# TP-Link Archer C5v — OpenWrt Portu
+# TP-Link Archer C5v — OpenWrt
 
-### Sorumluluk Reddi Beyanı
+EcoNet EN751221 tabanlı TP-Link Archer C5v için OpenWrt portu (kernel 6.18).
 
-İşbu kaynak kodu, tarafımızca herhangi bir garanti veya taahhüt verilmeksizin,
-"olduğu gibi" esasıyla kamuya sunulmaktadır. Bu yazılımın cihazınıza
-yüklenmesinden veya kullanılmasından kaynaklanabilecek her türlü arıza, veri
-kaybı veya işlevsel bozulmadan bizzat kullanıcı sorumludur; tarafımıza
-herhangi bir sorumluluk veya yükümlülük atfedilemez. Cihazın orijinal (stok)
-yazılımına geri döndürülmesi işlemi de tamamen kullanıcının kendi
-inisiyatifinde ve sorumluluğundadır. Bu konuda ücretsiz destek hizmetimiz yok.
+> **Sorumluluk reddi:** Bu yazılım "olduğu gibi" sunulur, hiçbir garanti verilmez. Kurulumdan doğabilecek arıza, veri kaybı veya cihaz bozulmasından kullanıcı sorumludur. ISP'nin kiraladığı cihazlara kurulumdan doğan hukuki sorunlar da kullanıcıya aittir.
 
-Kaynak koddan derleyip kendi cihazınıza yüklediğiniz durumda garanti verilmez.
-Kaynak kodu, İnternet Servis Sağlayıcınız (ISP) tarafından kiralanan bir cihaza yüklemeniz durumunda oluşabilecek hukuki sorunlardan ve sözleşme ihlallerinden Arı Bilişim İletişim ve Danışmanlık sorumlu değildir.
-Hepsiburada'dan satın alınan cihazlar, Arı Bilişim İletişim ve Danışmanlık tarafından satılan, ISP ile ilgisi olmayan, sıfır kutulu ve garantili cihazlardır. Satış koşullarındaki garanti kapsamındadır.
+## Donanım
 
-**Kurulumla uğraşmak istemeyen kullanıcılarımız, sıfır kutulu, garantili ve
-hazır/test edilmiş bir ürün için ürünümüze buradan ulaşabilir:**
+| | |
+|---|---|
+| SoC | EcoNet EN751221 (MIPS 34Kc, big-endian, 2 VPE) |
+| RAM | 128 MB DDR3 |
+| Flash | 128 MB SPI NAND (ESMT F50L1G) |
+| 2.4 GHz | MT7603 (`kmod-mt7603`) |
+| 5 GHz | MT7612EN (`kmod-mt76x2`) |
+| UART | `J1059` (4 pin, 115200 8N1, 3.3V) |
 
-* Hepsiburada: https://www.hepsiburada.com/openwrt-yuklu-tp-link-archer-c5v-ac1200-router-p-HBCV0000FGW44B?magaza=ARI%20B%C4%B0L%C4%B0%C5%9E%C4%B0M%20%C4%B0LET%C4%B0%C5%9E%C4%B0M%20VE%20DANI%C5%9EMANLIK
+## Özellikler
 
-Hepsiburada'dan veya doğrudan ofisimizden faturalı ve garantili olarak da satın alabilirsiniz.
+- Donanımsal NAT hızlandırma (PPE/FOE offload), gigabit'te ~930 Mbit/s
+- İkinci CPU çekirdeği aktif (VPE/SMP)
+- Çoklu iş parçacığı ve ağ yığını iyileştirmeleri
+- NAND flash ve genel kararlılık düzeltmeleri
+- WAN VLAN: Türk Telekom ve TT altyapılı ISP'ler için `eth0.35`, Türkcell Superonline için `eth0.2`
 
-Kurumsal ve toplu alımlar için: emreyavuzalp2@gmail.com
+---
 
-### WAN Ayarı
+## Kurulum
 
-WAN portu, kullanılan altyapıya göre farklı bir VLAN ile çalışır:
+Kurulum UART üzerinden yapılır. Önce OpenWrt RAM'den (initramfs) açılır, flash yedeklenir, sonra `sysupgrade` ile kalıcı olarak yazılır. Bootloader (`boot` partition'ı) hiçbir adımda değiştirilmez.
 
-* Türk Telekom ve Türk Telekom altyapılı ISP'ler: `eth0.35`
-* Türkcell Superonline altyapısı: `eth0.2`
+### Gerekenler
 
-Bu, cihazın programlaması gereği böyledir.
+- 3.3V USB-TTL adaptörü (5V **kullanmayın**)
+- Ethernet kablosu
+- Tera Term (XMODEM desteği için)
+- Bu depodaki dosyalar:
 
-### Dikkat ve Sınırlar
+| Dosya | Boyut | Kontrol | Ne işe yarar |
+|---|---|---|---|
+| `tclinux.bin` | 5.596.176 bayt | MD5 `8c3bb42cc775951863353db586fece4e` (CRC32 `a9eabc95`) | RAM'de açılan OpenWrt (initramfs) |
+| `c5v-mover-556410.bin` | 284 bayt | MD5 `9a0926df9ce82a80a133ab066d09c0eb` | İmajı RAM'de doğru adrese taşıyan küçük program |
+| `openwrt-econet-en751221-tplink_archer-c5v-squashfs-sysupgrade.bin` | 13.609.227 bayt | MD5 `c1d6d0df63d39cbcdcdc68690800f152` | Flash'a yazılacak kalıcı imaj |
 
-Bu depo, GPL kapsamındaki kaynak kodunu ve cihaza özel yapılandırma dosyalarını içerir.
+> `tclinux.bin` ile `c5v-mover-556410.bin` birbirine bağlıdır. Mover, bu `tclinux.bin`'in boyutuna göre hazırlanmıştır. Farklı bir initramfs kullanacaksanız mover da yeniden üretilmelidir (bkz. [Teknik notlar](#teknik-notlar)).
 
-Yükleme yöntemleri bu depo kapsamında değildir.
+### 1. UART bağlantısı
 
-Kaynak kodu, İnternet Servis Sağlayıcınız (ISP) tarafından kiralanan bir cihaza
-yüklemeniz durumunda oluşabilecek hukuki sorunlardan ve sözleşme ihlallerinden
-Arı Bilişim İletişim ve Danışmanlık sorumlu değildir.
+`J1059` header'ındaki pinleri multimetreyle belirleyin (siyah prob GND'de):
 
-Satışını yaptığımız cihazlar ISP ile ilgisi olmayan, sıfır kutulu ve garantili
-cihazlardır.
+- **GND:** Router kapalıyken metal kalkanla bip veren pin
+- **VCC:** Router açıkken sabit 3.3V. **Bağlamayın.**
+- **TX:** Açılışın ilk saniyelerinde dalgalanan pin
+- **RX:** Kalan pin
 
-"Nasıl flashlanır?" gibi sorular için, kendi cihazınızda deneme yapmak yerine hazır ve test edilmiş cihazımızı tercih etmenizi öneririz.
+Bağlantı: adaptör GND → GND, adaptör RX → router TX, adaptör TX → router RX. Tera Term ayarları: **115200, 8N1, flow control kapalı**.
 
-Donanım riski almak istemeyenler için tak-çalıştır, test edilmiş ve garantili cihazlar Hepsiburada'da mevcuttur.
+### 2. Bootloader'ı durdur ve rescue sayfasını aç
 
-Bu depodaki imaj Kolay Menü sayfalarını içermemektedir. Kolay Menü sayfaları
-yalnızca Hepsiburada üzerinden satın alınan ürünlerde mevcuttur.
+Router'ı açın. `Press any key in 1 secs to enter boot command mode.` yazısı çıkınca bir tuşa basın. `bldr>` istemi geldiğinde:
 
-### Kolay Menü
+```
+bldr> httpd
+```
 
-Hepsiburada'dan satın alınan cihazlarda, stok LuCI'nin üzerine eklenen
-"Kolay Menü" adlı basitleştirilmiş sayfalar gelir. Amaçları, normalde
-birden fazla ekranda ve teknik bilgi gerektiren ayarları tek bir sayfaya
-indirmek:
+Bilgisayarın Ethernet bağlantısına elle IP verin: `192.168.1.2`, maske `255.255.255.0`. Tarayıcıda `http://192.168.1.1` adresini açın.
 
-* **Kolay Kurulum:** WAN/protokol seçimi ve kablosuz ayarları gibi ilk
-  kurulum adımlarını tek sayfada toplar.
-* **WireGuard VPN:** Road-warrior bir WireGuard sunucusunu ve istemci QR
-  kodunu birkaç tıkla kurar; stok OpenWrt'te bu elle yapılandırma,
-  sertifika ve istemci profili oluşturmayı gerektirir.
-* **Misafir Wi-Fi:** Ayrı bir misafir ağını birkaç saniyede açar.
-* **USB Paylaşım (SMB + FTP):** Cihaza takılan bir USB diski ağ üzerinden
-  SMB ve FTP ile paylaşıma açar.
-* **Android/iOS USB Tethering:** Telefonu USB portuna takıp tethering'i
-  açtığınızda cihaz bunu otomatik olarak yedek internet bağlantısı olarak
-  kullanır. Gerekli sürücüler ve ayarlar imaja gömülüdür, ek bir
-  yapılandırma gerekmez.
+### 3. `tclinux.bin`'i RAM'e yükle
 
-Aşağıda bunlardan birinin, Wi-Fi Genişletici sayfasının, nasıl çalıştığına
-örnek verelim.
+Rescue sayfasından `tclinux.bin` dosyasını yükleyin. Dosyanın adı tam olarak `tclinux.bin` olmalıdır.
 
-#### Örnek: Wi-Fi Genişletici
+Konsolda şu çıktı görünür. Hata mesajı **normaldir**: dosyada TP-Link başlığı olmadığı için flash'a yazılmaz, sadece RAM'e iner.
 
-Kolay Menü'deki sayfalardan biri, cihazı yaklaşık 25 saniye içinde bir Wi-Fi
-genişletici (repeater) ya da mesh düğümü olarak ayarlamaya yarıyor. Stok
-OpenWrt'te bu işlem için ayrı ayrı arayüz, kablosuz ve ağ ayarları elle
-yapılmalıdır; bu sayfa hepsini tek ekrana indiriyor.
+```
+rcvdata_size = 5596176
+start = 0x80020325
+Check data fail, upload failed
+Fail to upload firmware!
+```
 
-Sayfadaki üç yöntem:
+`rcvdata_size` ve `start` değerleri bunlardan farklıysa devam etmeyin.
 
-* **WDS (önerilen):** Klasik köprü yöntemi. Çok eski olmayan birçok operatör
-  modem/router cihazında da desteklenir, bu yüzden en geniş uyumluluğu
-  sağlayan ve önerilen seçenektir.
-* **Relayd:** Ana cihaz WDS desteklemiyorsa (bazı ISP modemleri) kullanılır.
-  Cihaz, modeme normal bir istemci gibi bağlanıp Wi-Fi'yi genişletir; gerçek
-  bir köprü olmadığından bazı cihaz keşif protokolleri (bazı yazıcı/oyun/UPnP)
-  çalışmayabilir.
-* **Mesh (802.11s):** Yalnızca iki OpenWrt cihazı arasında çalışır, farklı
-  marka/cihazla uyumlu değildir.
+> ⚠️ Rescue sayfası, geçerli bir TP-Link başlığı taşıyan dosyaları **doğrudan flash'a yazar**. Bu sayfaya `tclinux.bin` dışında bir dosya yüklemeyin.
 
-### Disclaimer (English)
+### 4. Mover'ı çalıştır
 
-This source code is provided "as is", without any warranty or commitment of any kind. The user is solely responsible for any malfunction, data loss, or damage resulting from installing or using this software on their device. Restoring the original stock firmware is also entirely at the user's own risk. No free support is provided.
+```
+bldr> xmdm a6000000 11c
+```
 
-If you build the software from source and install it on your own device, no warranty is provided for that device. Devices purchased from Hepsiburada are sold by Arı Bilişim İletişim ve Danışmanlık. They are unrelated to any ISP, come as new sealed units, and are covered by the warranty terms of the sale.
-Arı Bilişim İletişim ve Danışmanlık is not responsible for any legal issues or contract violations that may arise if you install this source code on a device rented from your Internet Service Provider (ISP).
+Tera Term'de **File → Transfer → XMODEM → Send** ile `c5v-mover-556410.bin` dosyasını gönderin. Ardından:
 
-Users who prefer a ready-to-use, tested device can buy it from Hepsiburada:
+```
+bldr> dump a6000000 10
+```
 
-* Hepsiburada: https://www.hepsiburada.com/openwrt-yuklu-tp-link-archer-c5v-ac1200-router-p-HBCV0000FGW44B?magaza=ARI%20B%C4%B0L%C4%B0%C5%9E%C4%B0M%20%C4%B0LET%C4%B0%C5%9E%C4%B0M%20VE%20DANI%C5%9EMANLIK
+Çıktı `40 19 60 00 24 18 ff fe 03 38 c0 24 40 98 60 00` olmalı. Doğruysa:
 
-You can also buy directly from our office, invoiced and under warranty.
+```
+bldr> jump a6000000
+bldr> dump a0020200 10
+bldr> dump a4000000 10
+```
 
-For corporate and bulk orders: emreyavuzalp2@gmail.com
+Beklenen çıktılar:
 
-### WAN Configuration
+```
+a0020200  a9 ea bc 95.00 55 64 10.43 4f 50 59 ...   (CRC, boyut, "COPY")
+a4000000  00 80 80 25.00 a0 88 25.00 c0 90 25.00 e0 98 25
+```
 
-The WAN port uses a different VLAN depending on the network infrastructure:
+İlk 4 bayt (`a9eabc95`) `tclinux.bin`'in CRC32 değeriyle aynı olmalıdır.
 
-* Türk Telekom and ISPs on Türk Telekom infrastructure: `eth0.35`
-* Türkcell Superonline infrastructure: `eth0.2`
+### 5. OpenWrt'yi RAM'den aç
 
-This is determined by the device's firmware programming.
+```
+bldr> jump 84000000
+```
 
-### Caution and Limits (English)
+Açılışta `UBI error: no valid UBI magic found inside mtd2` mesajı görünür. Bu normaldir, flash'ta henüz UBI yoktur.
 
-This repository contains the GPL-licensed source code and device-specific configuration files.
+Initramfs'te DHCP sunucusu çalışmaz. Bilgisayardaki `192.168.1.2` IP'si ile router'a `192.168.1.1` adresinden bağlanılır.
 
-Installation methods are outside the scope of this repository.
+### 6. Flash'ı yedekle (atlamayın)
 
-Arı Bilişim İletişim ve Danışmanlık is not responsible for any legal issues or contract violations that may arise if you install this source code on a device rented from your Internet Service Provider (ISP).
+Bu yedek stok firmware'e dönmenin **tek yoludur**. `radio` partition'ında WiFi kalibrasyon verisi bulunur ve bu veri yeniden üretilemez.
 
-The devices we sell are unrelated to any ISP and come as new, sealed, warrantied units.
+Windows'ta **CMD** açın (PowerShell binary veriyi bozar):
 
-For questions such as "How is it flashed?", we recommend choosing our ready and tested device instead of experimenting on your own.
+```bat
+mkdir "%USERPROFILE%\c5v-yedek"
+cd /d "%USERPROFILE%\c5v-yedek"
+for %i in (0 1 2 3 4 5 6) do ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=NUL root@192.168.1.1 "nanddump -q -a --bb=padbad /dev/mtd%i" > mtd%i.bin
+for %i in (0 1 2 3 4 5 6) do @certutil -hashfile mtd%i.bin MD5 | findstr /v ":"
+```
 
-Users who want to avoid hardware risk can buy plug-and-play, tested and warrantied devices from Hepsiburada.
-
-### Easy Menu
+Router'da aynı değerleri alıp karşılaştırın:
 
-"Easy Menu" (Kolay Menü) is our own custom-built set of simplified pages,
-on top of stock LuCI, that ship with the devices we sell. Their purpose is
-to reduce settings that normally take several screens and some technical
-knowledge down to a single page:
+```sh
+for i in 0 1 2 3 4 5 6; do nanddump -q -a --bb=padbad /dev/mtd$i 2>/dev/null | md5sum; done
+```
 
-* **Easy Setup:** Gathers the initial setup steps — WAN/protocol selection,
-  wireless settings — onto a single page.
-* **WireGuard VPN:** Sets up a road-warrior WireGuard server and a client
-  QR code in a few clicks; on stock OpenWrt this means manual
-  configuration, certificates and client profiles.
-* **Guest Wi-Fi:** Turns on a separate guest network in seconds.
-* **USB Sharing (SMB + FTP):** Shares a USB drive plugged into the device
-  over the network via SMB and FTP.
-* **Android/iOS USB Tethering:** When you plug a phone into the USB port
-  and enable tethering, the device automatically uses it as a backup
-  internet connection. The required drivers and settings are built into
-  the image, so no extra configuration is needed.
+Yedi değerin hepsi eşleşmeli. Yedekleri ayrıca USB belleğe veya buluta kopyalayın.
 
-Here's an example of how one of them, the Wi-Fi extender page, works.
+### 7. Kalıcı kurulum
 
-#### Example: Wi-Fi Extender
+Windows'tan imajı gönderin:
 
-One of these pages sets the device up as a Wi-Fi extender (repeater) or
-mesh node in about 25 seconds. On stock OpenWrt the same result requires
-configuring the interface, wireless and network settings separately; this
-page reduces all of that to a single screen.
+```
+scp -O -o StrictHostKeyChecking=no -o UserKnownHostsFile=NUL openwrt-econet-en751221-tplink_archer-c5v-squashfs-sysupgrade.bin root@192.168.1.1:/tmp/fw.bin
+```
 
-The three methods on the page:
+`-O` için "unknown option" hatası alırsanız bu seçeneği silin.
 
-* **WDS (recommended):** The classic bridging method. Supported by many
-  carrier modems/routers too, as long as they're not very old, which makes it
-  the most broadly compatible and recommended choice.
-* **Relayd:** Used when the main device doesn't support WDS (some ISP
-  modems). The device connects to the modem as a normal client and extends
-  Wi-Fi; since it isn't a real bridge, some device-discovery protocols (some
-  printers/games/UPnP) may not work.
-* **Mesh (802.11s):** Only works between two OpenWrt devices, not compatible
-  with other brands/devices.
+Router'da:
 
-### Teşekkür
+```sh
+md5sum /tmp/fw.bin          # c1d6d0df63d39cbcdcdc68690800f152 olmalı
+sysupgrade -T /tmp/fw.bin   # sadece doğrular, bir şey yazmaz
+sysupgrade -n /tmp/fw.bin
+```
 
-Ethernet sürücüsünün önemli bir kısmı Sayın Caleb James Delisle'ye aittir
-(GitHub: [cjdelisle](https://github.com/cjdelisle)). EcoNet için ethernet
-projesini başlattığı ve bizi bu çalışmaya cesaretlendirdiği için kendisine
-teşekkürü borç biliriz. Bu projeye kattığımız kısımlar ise donanımsal
-hızlandırma (hardware offloading), VLAN ayrımı (VLAN split), çoklu iş
-parçacığı (multi-threading), NAND flash kararlılığı ve genel kararlılık
-odaklı geliştirmelerdir.
+Yazma 1–3 dakika sürer ve router kendiliğinden yeniden başlar. Bu sırada **fişi çekmeyin**.
 
-### Acknowledgments
+### 8. İlk açılış
 
-A significant portion of the Ethernet driver belongs to Mr. Caleb James
-Delisle (GitHub: [cjdelisle](https://github.com/cjdelisle)). We owe him our
-thanks for starting the Ethernet project for EcoNet and for encouraging us
-along the way. My own contributions to this project are the hardware
-offloading, VLAN split, multi-threading, NAND flash stability, and general
-stability-focused improvements.
+- Bilgisayarı tekrar otomatik IP'ye alın.
+- LuCI: `http://192.168.1.1`, kullanıcı adı `root`, şifre yok. İlk girişte şifre belirleyin.
+- WAN'ı ISP'nize göre ayarlayın: Türk Telekom için `eth0.35`, Superonline için `eth0.2`.
 
-### Öne Çıkan Özellikler
+---
 
-Temel Ethernet sürücüsü Caleb James Delisle'nin (bkz. Teşekkür), ama aşağıdaki
-donanımsal PPE/FOE offload ve ikinci CPU çekirdeği (VPE/SMP) desteği bizim
-tarafımızdan geliştirildi; bu yazının yazıldığı tarihte upstream sürücüde yer
-almıyor.
+## Stok firmware'e dönüş
 
-* **Donanımsal NAT hızlandırma (PPE/FOE offload):** Yönlendirilen trafik
-  SoC'nin donanım motoruna yükleniyor; ölçümlerde gigabit hatta ~930 Mbit/s
-  işlem gücünün büyük kısmı boşta kalacak şekilde elde edildi.
-* **İkinci CPU çekirdeği aktif (VPE/SMP):** EN751221'in ikinci donanım
-  çekirdeğini çalışır hale getiren, bu SoC için upstream OpenWrt'te
-  desteklenen hiçbir cihazda bulunmayan bir düzeltme içeriyor.
-* **Çoklu iş parçacığı ve ağ yığını iyileştirmeleri:** Kablolu ve kablosuz
-  trafiği CPU çekirdekleri arasında dağıtan ayarlarla verim artışı.
-* **VLAN ayrımı:** Türk Telekom/Türk Telekom altyapılı ISP (`eth0.35`) ve
-  Türkcell Superonline (`eth0.2`) için ayrı WAN yapılandırması.
-* **NAND flash ve genel kararlılık iyileştirmeleri:** Uzun süreli kullanımda
-  gözlenen kararsızlıklar için yapılan düzeltmeler.
+> Bu yöntem henüz test edilmedi.
 
-### Highlighted Features
+1. Kurulumun 2–5. adımlarıyla initramfs'i açın.
+2. Router'da UBI bağlıysa ayırın:
 
-The base Ethernet driver is Caleb James Delisle's (see Acknowledgments), but
-the hardware PPE/FOE offload and second-CPU-core (VPE/SMP) support below were
-developed by us; as of this writing they are not in the upstream driver.
+```sh
+ubidetach -p /dev/mtd2 2>/dev/null
+```
 
-* **Hardware NAT acceleration (PPE/FOE offload):** Routed traffic is
-  offloaded to the SoC's hardware engine; measurements reached ~930 Mbit/s
-  on gigabit while most of the CPU stayed idle.
-* **Second CPU core enabled (VPE/SMP):** A fix that brings up EN751221's
-  second hardware core, something no device currently supported by
-  upstream OpenWrt for this SoC has.
-* **Multi-threading and network stack improvements:** Tuning that spreads
-  wired and wireless traffic across CPU cores for higher throughput.
-* **VLAN separation:** Separate WAN configuration for Türk Telekom /
-  Türk Telekom-infrastructure ISPs (`eth0.35`) and Türkcell Superonline
-  (`eth0.2`).
-* **NAND flash and general stability fixes:** Fixes for instabilities
-  observed over long-term use.
+3. Windows'ta yedek klasöründe **CMD** ile iki partition'ı doğrudan SSH üzerinden yazın. mtd2 96 MB olduğu için RAM'e sığmaz, bu yüzden dosyayı `/tmp`'ye kopyalamak yerine akıtarak yazıyoruz:
 
+```bat
+ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=NUL root@192.168.1.1 "mtd write - kernel" < mtd1.bin
+ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=NUL root@192.168.1.1 "mtd write - ubi" < mtd2.bin
+```
 
-TP-Link Archer C5v — OpenWrt Personalizado
+4. Router'da `reboot` yazın.
 
-Este repositorio contiene el código fuente base adaptado para el router TP-Link Archer C5v. Con este firmware obtienes mayor estabilidad, alto rendimiento y control total sobre tu red.
-Rendimiento Mejorado
+Stok firmware'in iki slotu da (ana imaj `0x20000`, yedek imaj `0x3220000`) bu yedeklerin içindedir.
 
-    Aceleración NAT por Hardware (PPE/FOE): Velocidades de hasta ~930 Mbps en puertos Gigabit sin sobrecargar el procesador.
+---
 
-    CPU de Doble Núcleo Activo (VPE/SMP): Aprovecha al 100% la capacidad del chip, mejorando la multitarea y el tráfico de red.
+## Flash düzeni
 
-    Mayor Estabilidad: Optimizaciones en la memoria flash para evitar caídas o reinicios.
+| mtd | Ad | Başlangıç | Boyut | Not |
+|---|---|---|---|---|
+| 0 | boot | `0x0000000` | 128 KB | Bootloader, salt okunur |
+| 1 | kernel | `0x0020000` | 4 MB | TP-Link v2 başlığı + LZMA kernel |
+| 2 | ubi | `0x0420000` | 96 MB | rootfs + overlay (stok ikinci slot dahil) |
+| 3 | romfile | `0x6420000` | 128 KB | Taban MAC `0xF100`'de, salt okunur |
+| 4 | config | `0x6440000` | 128 KB | |
+| 5 | radio | `0x6460000` | 128 KB | 2.4G EEPROM `0x0`, 5G EEPROM `0x8000`, salt okunur |
+| 6 | reserve_area | `0x6480000` | 14.75 MB | Boot flag `0x6560000`'de, salt okunur |
 
-Versión con "Menú Fácil" (Kolay Menü)
+Bootloader açılışta `0x6560000`'daki boot flag'i okur (`0` = ana slot). Kernel'i `0x20000`'daki TP-Link başlığına göre `0x80020000` adresine açar ve oraya atlar.
 
-Para quienes prefieren no complicarse con la interfaz avanzada tradicional de OpenWrt, ofrecemos una versión exclusiva con Menú Fácil, diseñada para configurar todo en segundos y sin conocimientos técnicos:
+---
 
-    Configuración Rápida: Conecta y configura tu conexión a Internet y Wi-Fi en una sola pantalla.
+## Teknik notlar
 
-    Servidor WireGuard VPN: Crea tu propia VPN segura con código QR para tu móvil en 2 clics.
+**Neden mover gerekiyor?** Bootloader'ın rescue sayfası yüklenen veriyi multipart başlığıyla birlikte `0x80020000`'a yazar. Bu yüzden imaj `0x80020325` gibi hizasız bir adrese düşer. MIPS'te kod 4 bayta hizalı adreste ve derlendiği adreste çalışmalıdır. Mover imajı `0x84000000`'a kopyalar, cache'i temizler ve kopyanın CRC32'sini `0xA0020200`'e yazar.
 
-    Extensor Wi-Fi / Repetidor: Amplía la señal de tu red principal (soporta WDS, Relayd y Mesh 802.11s) en menos de 30 segundos.
+**Neden initramfs `0x84000000`'a bağlı?** Büyük bir initramfs `0x80020000`'a bağlanırsa, açıcı kodun bellek alanı (`bss` + heap) kernel'in açıldığı `0x81000000` bölgesinin üstüne taşar ve açılış çöker. Bu yüzden initramfs build'inde `CONFIG_ZBOOT_LOAD_ADDRESS=0x84000000` kullanılır. **Flash'a yazılan kernel `0x80020000`'da kalmalıdır**, çünkü bootloader TP-Link başlığındaki bu adrese yükler. Sysupgrade imajını `0x84000000` ayarıyla derlemeyin.
 
-    Wi-Fi de Invitados: Red secundaria aislada al instante.
+**Neden `xmdm a6000000`?** `xmdm`, veriyi D-cache'ten RAM'e aktarmadan bırakır. Önbellekli adrese (`0x86000000`) yüklenen kod çalıştırılınca işlemci RAM'deki eski veriyi okur ve çöker. Önbelleksiz KSEG1 adresine (`0xA6000000`) yazmak bu sorunu ortadan kaldırır.
 
-    Puerto USB Multifunción: Comparte discos duros por red (SMB/FTP) o conecta tu móvil Android/iPhone por cable USB para usar sus datos móviles como respaldo si se corta la fibra.
+**Mover'ı başka bir initramfs için üretmek:** Mover'da imaja bağlı dört değer vardır: kaynak başlangıcı, kaynak sonu (`start + size`), cache döngüsünün sınırı (`0x84000000 + size`, 32 bayta yuvarlanmış) ve CRC döngüsünün sınırı ile kaydedilen boyut. Bunlar mover'daki `lui`/`ori` çiftleridir (ofsetler `0x14`, `0x24`, `0x4C`, `0x90`, `0xEC`).
 
-(Nota: Las funciones del Menú Fácil están disponibles exclusivamente en nuestras unidades preconfiguradas y listas para usar).
-Soporte, Ventas y Consultas
+## Kendin derlemek
 
-¿Quieres adquirir routers preconfigurados, necesitas soporte para tu proveedor local o buscas compras por volumen para proyectos y empresas?
+```sh
+make menuconfig   # Target: econet / en751221, Profile: TP-Link Archer C5v
+make -j"$(nproc)"
+```
 
-Escríbenos directamente por correo electrónico:
+Initramfs'i RAM'den açmak için ayrıca derlerken `target/linux/econet/en751221/config-6.18` dosyasındaki `CONFIG_ZBOOT_LOAD_ADDRESS` değerini `0x84000000` yapın. Sadece initramfs'i alın, sonra ayarı `0x80020000`'a geri döndürün.
 
-✉️ emreyavuzalp2@gmail.com
+## Teşekkür
+
+Ethernet sürücüsünün temeli Caleb James Delisle'ye aittir ([cjdelisle](https://github.com/cjdelisle)). EN751221 için OpenWrt desteğini başlattığı için teşekkürler.

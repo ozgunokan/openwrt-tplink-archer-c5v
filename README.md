@@ -13,7 +13,7 @@ EcoNet EN751221 tabanlı TP-Link Archer C5v için OpenWrt portu (kernel 6.18).
 | Flash | 128 MB SPI NAND (ESMT F50L1G) |
 | 2.4 GHz | MT7603 (`kmod-mt7603`) |
 | 5 GHz | MT7612EN (`kmod-mt76x2`) |
-| UART | `J1059` (4 pin, 115200 8N1, 3.3V) |
+| UART | `J1059` (TX, RX, GND, VCC — 115200 8N1, 3.3V) |
 
 ## Özellikler
 
@@ -46,14 +46,20 @@ Kurulum UART üzerinden yapılır. Önce OpenWrt RAM'den (initramfs) açılır, 
 
 ### 1. UART bağlantısı
 
-`J1059` header'ındaki pinleri multimetreyle belirleyin (siyah prob GND'de):
+UART pinleri, kartta RAM çipinin üstündeki `J1059` header'ındadır. Pin 1, `▷` işaretinin olduğu taraftaki pindir.
 
-- **GND:** Router kapalıyken metal kalkanla bip veren pin
-- **VCC:** Router açıkken sabit 3.3V. **Bağlamayın.**
-- **TX:** Açılışın ilk saniyelerinde dalgalanan pin
-- **RX:** Kalan pin
+<p align="center"><img src="docs/uart-pinout.png" alt="Archer C5v UART pinleri (J1059)" width="420"></p>
 
-Bağlantı: adaptör GND → GND, adaptör RX → router TX, adaptör TX → router RX. Tera Term ayarları: **115200, 8N1, flow control kapalı**.
+| Pin | Router | USB-TTL adaptör |
+|---|---|---|
+| 1 | TX | RXD |
+| 2 | RX | TXD |
+| 3 | GND | GND |
+| 4 | VCC | **Bağlamayın** |
+
+Router kendi adaptöründen beslenmelidir. USB-TTL adaptörün VCC, 3V3 veya 5V ucunu karta bağlamayın.
+
+Tera Term ayarları: **115200, 8N1, flow control kapalı**.
 
 ### 2. Bootloader'ı durdur ve rescue sayfasını aç
 
@@ -231,4 +237,6 @@ Initramfs'i RAM'den açmak için ayrıca derlerken `target/linux/econet/en751221
 
 ## Teşekkür
 
-Ethernet sürücüsünün temeli Caleb James Delisle'ye aittir ([cjdelisle](https://github.com/cjdelisle)). EN751221 için OpenWrt desteğini başlattığı için teşekkürler.
+- **Emre Yavuzalp**: Archer C5v için OpenWrt desteğini oluşturduğu için.
+- **Caleb James Delisle** ([cjdelisle](https://github.com/cjdelisle)): EN751221 için OpenWrt desteğini başlattığı ve ethernet sürücüsünün temelini yazdığı için.
+- **laserbird**: Destekleri için.

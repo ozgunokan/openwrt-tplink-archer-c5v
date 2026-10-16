@@ -1,0 +1,32 @@
+From: genetixteam <genetixteam@gmail.com>
+Subject: fw4: keep the bridge device in the hw offload flowtable
+
+With hardware offload fw4 replaces br-lan with its member ports. Wi-Fi
+flows cannot resolve a forward path through mac80211, so the kernel keeps
+br-lan as their ingress device; with br-lan missing from the flowtable,
+every packet from a Wi-Fi client took the full slow path (EX20v v2:
+Wi-Fi 130 Mbit/s with hw offload vs 280 with software offload). Keep the
+bridge itself next to its lower devices.
+
+diff --git a/root/usr/share/ucode/fw4.uc b/root/usr/share/ucode/fw4.uc
+index 617d8a5..4e2c0a8 100644
+--- a/root/usr/share/ucode/fw4.uc
++++ b/root/usr/share/ucode/fw4.uc
+@@ -447,7 +447,16 @@ function resolve_lower_devices(devstatus, devname) {
+ 	let devs = [];
+ 
+ 	if (dir) {
+-		switch (devstatus[devname]?.devtype ?? sysfs_devtype(devname)) {
++		let dt = devstatus[devname]?.devtype ?? sysfs_devtype(devname);
++
++		/* EX20v: keep the bridge itself too. Wi-Fi flows cannot resolve a
++		 * forward path through mac80211, so their tuples keep br-lan as
++		 * the ingress device; without br-lan in the flowtable those
++		 * packets never reach the software fast path. */
++		if (dt == 'bridge')
++			push(devs, devname);
++
++		switch (dt) {
+ 		case 'vlan':
+ 		case 'bridge':
+ 			let e;

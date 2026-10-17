@@ -239,4 +239,4 @@ Initramfs'i RAM'den açmak için ayrıca derlerken `target/linux/econet/en751221
 
 - **Emre Yavuzalp**: Archer C5v için OpenWrt desteğini oluşturduğu için.
 - **Caleb James Delisle** ([cjdelisle](https://github.com/cjdelisle)): EN751221 için OpenWrt desteğini başlattığı ve ethernet sürücüsünün temelini yazdığı için.
-- **laserbird**: Destekleri için.
+- **laserbird**: Destekleri için. https://github.com/laserbirdx
